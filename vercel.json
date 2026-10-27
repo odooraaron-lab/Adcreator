@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/claude.js": { "maxDuration": 120 },
+    "api/fetch-page.js": { "maxDuration": 30 }
+  }
+}

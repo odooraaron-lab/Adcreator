@@ -70,7 +70,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .field{display:grid;gap:5px;min-width:0}
 .field label,.lbl{font-size:11.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-input[type=text],input[type=url],select,textarea{width:100%;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px;color:var(--ink)}
+input[type=text],input[type=url],input[type=password],select,textarea{width:100%;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px;color:var(--ink)}
 textarea{resize:vertical;min-height:76px;line-height:1.4}
 input::placeholder,textarea::placeholder{color:var(--muted);opacity:.75}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:600;font-size:14px;padding:10px 15px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer;white-space:nowrap}
@@ -186,6 +186,7 @@ input[type=color]{width:100%;height:36px;border:1px solid var(--line);border-rad
 
     <section class="pane" id="pane-venue" role="tabpanel" aria-labelledby="tab-venue">
       <h2>Venue details</h2>
+      <div class="field" id="passBox" hidden><label for="v-pass">Access password</label><input type="password" id="v-pass" autocomplete="current-password" placeholder="Ask the site owner"></div>
       <div class="field"><label for="v-name">Business name</label><input type="text" id="v-name" data-v="name" placeholder="The Tidewater Tavern" autocomplete="off"></div>
       <div class="field"><label for="v-address">Address</label><input type="text" id="v-address" data-v="address" placeholder="12 Wharf Road, Riverside" autocomplete="off"></div>
       <div class="field"><label for="v-website">Website</label><input type="url" id="v-website" data-v="website" placeholder="venuename.co.nz" autocomplete="off"></div>
@@ -205,7 +206,7 @@ input[type=color]{width:100%;height:36px;border:1px solid var(--line);border-rad
         <button class="btn primary" id="collectBtn" type="button">Collect info &amp; create slides</button>
         <button class="btn" id="stopBtn" type="button" hidden>Stop</button>
       </div>
-      <p class="hint" id="webHint">Web reading opens each link in the Claude desktop app's browser. Without it, paste details into Notes or add screenshots.</p>
+      <p class="hint" id="webHint">Facebook and Instagram often block automatic reading. If they do, paste their details into Notes or add screenshots.</p>
       <ol class="log" id="log" aria-live="polite"></ol>
     </section>
 
@@ -927,6 +928,7 @@ function bindVenue() {
   });
   $("#shots").addEventListener("change", (e) => { addShots([...e.target.files]); e.target.value = ""; });
   $("#collectBtn").addEventListener("click", collectInfo);
+  $("#v-pass").addEventListener("change", (e) => { setPass(e.target.value); initCaps(); });
   $("#stopBtn").addEventListener("click", () => { if (rt.ctl) rt.ctl.abort(); });
 }
 function addShots(files) {
@@ -1095,34 +1097,77 @@ function autoAssignPhotos() {
 function setChip(id, s, word) { const el = $(id); el.dataset.s = s; el.querySelector("b").textContent = word; }
 function updateStatus() {
   setChip("#st-claude", rt.claude, rt.claude === "on" ? "ready" : rt.claude === "off" ? "unavailable" : "checking");
-  setChip("#st-web", rt.browser, rt.browser === "on" ? "desktop app" : rt.browser === "off" ? "off here" : "checking");
-  setChip("#st-save", rt.saving, rt.saving === "on" ? "on" : rt.saving === "off" ? "view only" : "checking");
-  $("#webHint").textContent = rt.browser === "on"
-    ? "Claude opens each link in the Claude desktop app's browser and reads the page. The app may ask you to allow each site."
-    : rt.browser === "off"
-      ? "Web reading only works when this page is open in the Claude desktop app. Here, paste details into Notes or add screenshots."
-      : "Web reading opens each link in the Claude desktop app's browser. Without it, paste details into Notes or add screenshots.";
+  setChip("#st-web", rt.browser, rt.browser === "on" ? "on" : rt.browser === "off" ? "off" : "checking");
+  setChip("#st-save", rt.saving, rt.saving === "on" ? "on" : rt.saving === "off" ? "off" : "checking");
+  $("#webHint").textContent = "Facebook and Instagram often block automatic reading. If they do, paste their details into Notes or add screenshots.";
   const noClaude = rt.claude === "off";
   ["#collectBtn", "#genBtn", "#genFromProfile", "#rewriteBtn"].forEach((s) => { $(s).disabled = rt.busy || noClaude; });
   $("#zipBtn").disabled = rt.busy;
   renderShots();
 }
-function initCaps() {
-  const C = window.claude;
-  if (!C || typeof C.use !== "function") { rt.claude = "off"; rt.browser = "off"; rt.saving = "off"; updateStatus(); return; }
-  C.use("sample").then(async (fn) => {
-    rt.sample = fn; rt.claude = fn ? "on" : "off";
-    if (fn) rt.limits = await fn.limits().catch(() => null);
-    updateStatus();
-  }).catch(() => { rt.claude = "off"; updateStatus(); });
-  C.use("downloads").then((d) => { rt.downloads = d; rt.saving = d ? "on" : "off"; updateStatus(); }).catch(() => { rt.saving = "off"; updateStatus(); });
-  C.use("mcp").then(async (m) => {
-    rt.mcp = m;
-    if (!m) { rt.browser = "off"; updateStatus(); return; }
-    try { const r = await m.listTools(); rt.browser = r && Array.isArray(r.servers) && r.servers.some((s) => s.server === HOST) ? "on" : "off"; }
-    catch (e) { rt.browser = "off"; }
-    updateStatus();
-  }).catch(() => { rt.browser = "off"; updateStatus(); });
+function apiHeaders(json) {
+  const h = {}; if (json) h["content-type"] = "application/json";
+  const pw = getPass(); if (pw) h["x-app-password"] = pw;
+  return h;
+}
+function getPass() { try { return localStorage.getItem("vps.pass") || ""; } catch (e) { return rt.pass || ""; } }
+function setPass(v) { rt.pass = v; try { localStorage.setItem("vps.pass", v); } catch (e) {} }
+function extractJson(text) {
+  const t = String(text || "").trim();
+  try { return JSON.parse(t); } catch (e) {}
+  const f = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (f) { try { return JSON.parse(f[1]); } catch (e) {} }
+  const a = Math.min(...["[", "{"].map((c) => { const i = t.indexOf(c); return i < 0 ? Infinity : i; }));
+  const b = Math.max(t.lastIndexOf("]"), t.lastIndexOf("}"));
+  if (a !== Infinity && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch (e) {} }
+  throw { code: "invalid_json" };
+}
+function fileToJpegBase64(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file); const img = new Image();
+    img.onload = () => {
+      const max = 1400, r = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement("canvas"); c.width = Math.round(img.naturalWidth * r); c.height = Math.round(img.naturalHeight * r);
+      const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", 0.82).split(",")[1]);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject({ code: "image_rejected" }); };
+    img.src = url;
+  });
+}
+async function apiSampleJson(prompt, opts = {}) {
+  let images = [];
+  if (opts.images && opts.images.length) images = await Promise.all([...opts.images].map(async (f) => ({ media_type: "image/jpeg", data: await fileToJpegBase64(f) })));
+  let r;
+  try { r = await fetch("/api/claude", { method: "POST", headers: apiHeaders(true), body: JSON.stringify({ prompt, images }), signal: opts.signal }); }
+  catch (e) { throw { code: e && e.name === "AbortError" ? "cancelled" : "upstream_error" }; }
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401) { showPass(true); throw { code: "unauthorised" }; }
+  if (!r.ok) throw { code: data.error === "missing_api_key" ? "missing_api_key" : (data.error || "upstream_error") };
+  if (data.stop_reason === "max_tokens") throw { code: "invalid_json" };
+  return extractJson(data.text);
+}
+function showPass(on) { $("#passBox").hidden = !on; }
+async function initCaps() {
+  rt.sample = { json: apiSampleJson };
+  rt.limits = { images: { maxCount: 5, maxInputBytes: 20 * 1024 * 1024, mediaTypes: ["image/jpeg", "image/png", "image/webp", "image/gif"] } };
+  rt.downloads = { save: async ({ filename, data }) => {
+    const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+    const a = document.createElement("a"); a.href = url; a.download = filename; document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return { status: "saved" };
+  } };
+  rt.saving = "on";
+  try {
+    const r = await fetch("/api/claude", { headers: apiHeaders(false) });
+    const d = await r.json();
+    rt.claude = d.ready ? "on" : "off"; rt.browser = d.ready ? "on" : "off";
+    if (!d.ready) log("The server has no ANTHROPIC_API_KEY set. Add it in Vercel's environment variables and redeploy.", "bad");
+    showPass(!!d.auth); $("#v-pass").value = getPass();
+    if (d.auth && !d.authorised) $("#v-pass").setAttribute("aria-invalid", getPass() ? "true" : "false");
+  } catch (e) { rt.claude = "off"; rt.browser = "off"; log("Couldn't reach the server. Check the Vercel deployment.", "bad"); }
+  updateStatus();
 }
 
 /* ---------- busy state ---------- */
@@ -1138,8 +1183,10 @@ function sampleError(e) {
   const c = e && e.code;
   switch (c) {
     case "cancelled": return "Stopped.";
+    case "unauthorised": return "Enter the access password at the top of the Venue tab, then try again.";
+    case "missing_api_key": return "The server has no Claude API key. Add ANTHROPIC_API_KEY in Vercel and redeploy.";
     case "not_granted": case "sampling_disabled": case "not_declared": case "capability_disabled": case "capability_removed":
-      return "Claude isn't allowed for this page. Allow it when asked, or open the page in claude.ai.";
+      return "Claude isn't available. Check the server setup.";
     case "rate_limited": return "Too many requests right now. Wait a minute, then try again.";
     case "session_expired": return "Your Claude session expired. Sign in again, then retry.";
     case "prompt_too_large": return "Too much page text to read at once. Remove a link or shorten the notes.";
@@ -1154,7 +1201,8 @@ function sampleError(e) {
 function mcpMsg(e) {
   const c = e && e.code;
   switch (c) {
-    case "server_not_connected": return "web reading needs the Claude desktop app";
+    case "unauthorised": return "needs the access password";
+    case "server_not_connected": return "the server isn't ready";
     case "not_in_manifest": case "approval_required": return "web reading wasn't allowed";
     case "cancelled": return "skipped";
     case "server_unavailable": return "the browser didn't respond";
@@ -1187,17 +1235,14 @@ function findTabId(r) {
   return m ? +m[1] : null;
 }
 async function browserRead(url, signal) {
-  const m = rt.mcp; if (!m) throw { code: "server_not_connected" };
-  if (rt.tabId == null) { rt.tabId = findTabId(await m.callTool(HOST, "preview_start", { url }, { signal })); }
-  else {
-    try { await m.callTool(HOST, "navigate", { url, tabId: rt.tabId }, { signal }); }
-    catch (e) { if (!e || e.code !== "tool_error") throw e; rt.tabId = findTabId(await m.callTool(HOST, "preview_start", { url }, { signal })); }
-  }
-  await wait(1500, signal);
-  const r = await m.callTool(HOST, "get_page_text", rt.tabId != null ? { tabId: rt.tabId } : {}, { signal, cache: false });
-  const text = resultText(r).replace(/[ \t]+/g, " ").replace(/\n\s*\n\s*\n+/g, "\n\n").trim();
-  if (text.length < 40) throw { code: "tool_error", message: "no readable text" };
-  return text.slice(0, 12000);
+  let r;
+  try { r = await fetch("/api/fetch-page?url=" + encodeURIComponent(url), { headers: apiHeaders(false), signal }); }
+  catch (e) { throw { code: e && e.name === "AbortError" ? "cancelled" : "server_unavailable" }; }
+  if (r.status === 401) { showPass(true); throw { code: "unauthorised" }; }
+  const d = await r.json().catch(() => ({}));
+  if (d.error || !d.text || d.text.length < 40) throw { code: "tool_error", message: d.error === "http_403" || d.error === "http_400" ? "the site blocked it" : d.error || "no readable text" };
+  rt.lastLinks = Array.isArray(d.links) ? d.links : [];
+  return d.text;
 }
 function imageList(files) {
   const lim = rt.limits && rt.limits.images; if (!lim) return [];
@@ -1234,12 +1279,12 @@ async function collectInfo() {
   const v = state.venue;
   logEl.textContent = "";
   if (!str(v.name)) { log("Add the business name first.", "bad"); $("#v-name").focus(); return; }
-  if (!rt.sample) { log("Claude isn't available in this view. Open the page in claude.ai.", "bad"); return; }
+  if (rt.claude !== "on") { log("The server isn't ready. Check ANTHROPIC_API_KEY in Vercel.", "bad"); return; }
   const links = [["Website", normUrl(v.website)], ["Facebook", socialUrl(v.facebook, "facebook.com")], ["Instagram", socialUrl(v.instagram, "instagram.com")], ["Other link", normUrl(v.other)]].filter(([, u]) => u);
   const shots = imageList(rt.shots.map((s) => s.file));
   const canRead = rt.browser === "on";
-  if (!canRead && !str(v.notes) && !shots.length) {
-    log("Web reading only works in the Claude desktop app. Here, paste the venue's details into Notes or add screenshots, then try again.", "bad");
+  if (!links.length && !str(v.notes) && !shots.length) {
+    log("Add a website or social link, notes or screenshots first.", "bad");
     return;
   }
   const ctl = startBusy("Reading the venue's pages…");
@@ -1257,7 +1302,18 @@ async function collectInfo() {
           if (e && e.code === "server_not_connected") { rt.browser = "off"; updateStatus(); break; }
         }
       }
-    } else if (links.length) log("Links weren't opened because web reading is off here. Using your notes and screenshots.", "warn");
+      const site = pages.find((pg) => links[0] && links[0][0] === "Website" && pg.url === links[0][1]);
+      if (site) {
+        const sub = [];
+        try { const r = await fetch("/api/fetch-page?url=" + encodeURIComponent(site.url), { headers: apiHeaders(false), signal: ctl.signal }); const d = await r.json(); (d.links || []).forEach((l) => sub.push(l.url)); } catch (e) { if (ctl.signal.aborted) throw { code: "cancelled" }; }
+        for (const u of sub.slice(0, 4)) {
+          if (ctl.signal.aborted) throw { code: "cancelled" };
+          const li = log(`Reading ${shortUrl(u)}`, "run");
+          try { const text = await browserRead(u, ctl.signal); pages.push({ url: u, text: text.slice(0, 8000) }); setLog(li, `Read ${shortUrl(u)}`, "ok"); }
+          catch (e) { if (e && e.code === "cancelled") throw e; setLog(li, `${shortUrl(u)}: ${mcpMsg(e)}`, "bad"); }
+        }
+      }
+    } else if (links.length) log("Links weren't opened because the server isn't ready. Using your notes and screenshots.", "warn");
     if (rt.shots.length && !shots.length) log("Screenshots can't be sent from this view, so they were skipped.", "warn");
     else if (shots.length) log(`Sending ${shots.length} screenshot${shots.length > 1 ? "s" : ""} to Claude`, "ok");
     if (!pages.length && !str(v.notes) && !shots.length) throw { code: "nothing" };
